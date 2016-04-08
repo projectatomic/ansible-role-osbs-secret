@@ -1,48 +1,35 @@
 ---
-# The way the files are read is retarded but I couldn't come up with any thing
-# better due to two ansible bugs:
-# - When ansible_sudo is defined in inventory, local_action tries to use sudo
-#   on the control host which doesn't make sense. Thus can't use local_action.
-# - If the file does not exist, lookup() fails the whole task fails even if
-#   ignore_errors/fail_when is used.
-
-- name: read cert from local directory
-  set_fact:
-    pulp_secret_cert_bits: "{{ lookup('file', item) }}"
-  with_first_found:
-  - "{{ pulp_secret_local_dir }}/pulp.cer"
-  - /dev/null
-  no_log: true
+- set_fact:
+    osbs_secret_files_exist: true
   tags:
   - oc
 
-- name: read key from local directory
-  set_fact:
-    pulp_secret_key_bits: "{{ lookup('file', item) }}"
-  with_first_found:
-  - "{{ pulp_secret_local_dir }}/pulp.key"
-  - /dev/null
-  no_log: true
+- set_fact:
+    osbs_secret_files_exist: false
+  when: lookup('file', lookup('first_found', [item.source, '/dev/null'])) == ''
+  with_items: "{{ osbs_secret_files }}"
   tags:
   - oc
 
 - fail:
-    msg: Pulp secrets not found (and pulp_secret_can_fail is false)
-  when: (pulp_secret_cert_bits == '' or pulp_secret_key_bits == '') and not pulp_secret_can_fail
+    msg: Some of the source secret files do not exist (and osbs_secret_can_fail is false)
+  when: not (osbs_secret_files_exist or osbs_secret_can_fail)
   tags:
   - oc
 
 - debug:
-    msg: Pulp secrets not found, skipping import
-  when: pulp_secret_cert_bits == '' or pulp_secret_key_bits == ''
+    msg: Some of the source secret files do not exist, skipping import
+  when: not osbs_secret_files_exist
   tags:
   - oc
 
 - name: create secrets resource file
-  template: src=openshift-pulpsecret.yml.j2 dest={{ pulp_secret_remote_dir }}/openshift-pulpsecret.yml mode="0600"
-  when: pulp_secret_cert_bits != '' and pulp_secret_key_bits != ''
+  template: src=openshift-secret.yml.j2 dest={{ osbs_secret_remote_dir }}/openshift-secret-{{ osbs_secret_name }}.yml mode="0600"
+  when: osbs_secret_files_exist
   notify:
-  - import pulp keys
-  - delete resource file
+  - import osbs secret
+  - delete secret resource file
   tags:
   - oc
+
+- meta: flush_handlers
